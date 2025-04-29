@@ -1,88 +1,117 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <err.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 
-enum { Bsize = 1024 };
+#define BUFFER_SIZE 1024
 
-void
-child(int *fd)
-{
-    close(fd[1]); // cerrar escritura
-    if (dup2(fd[0], STDIN_FILENO) < 0) {
-        err(EXIT_FAILURE, "cannot dup pipe to stdin");
-    }
-    close(fd[0]);
+int main(int argc, char *argv[]) {
 
-    execl("/usr/bin/gunzip", "gunzip", "-c", NULL);
-    err(EXIT_FAILURE, "cannot exec gunzip");
-}
+    argv ++;
+    argc --;
 
-int
-main(int argc, char *argv[])
-{
-    int fd[2];
-    char buf[Bsize];
-    int gzfile;
-    ssize_t n;
-    int status;
+    int pipe_fd[2];
+    int pid1;
+    int pid2;
+    int fd;
+    char buffer[BUFFER_SIZE];
+    int n;
+    int sts;
+    char *nombre_fichero;
+    int i;
 
-    if (argc != 2) {
-        err(EXIT_FAILURE, "usage: %s <file.gz>", argv[0]);
+    if (argc != 1) {
+        fprintf(stderr, "Uso: %s <archivo_salida>\n", argv[0]);
+        exit(1);
     }
 
-    if (pipe(fd) < 0) {
-        err(EXIT_FAILURE, "cannot make a pipe\n");
+    nombre_fichero = argv[0];
+
+    if (pipe(pipe_fd) == -1) {
+        fprintf(stderr, "Error al crear el pipe\n");
+        exit(1);
     }
 
-    switch (fork()) {
-    case -1:
-        err(EXIT_FAILURE, "cannot fork\n");
-    case 0:
-        child(fd);
-        exit(EXIT_SUCCESS);
-    default:
-        close(fd[0]); 
+    pid1 = fork();
+    switch (pid1) {
+        case -1:
+            fprintf(stderr, "Error en fork 1\n");
+            exit(1);
+        
+        case 0:
+            close(pipe_fd[0]);
 
-        gzfile = open(argv[1], O_RDONLY);
-        if (gzfile < 0) {
-            err(EXIT_FAILURE, "cannot open input file\n");
-        }
-
-        while ((n = read(gzfile, buf, sizeof(buf))) > 0) {
-            if (write(fd[1], buf, n) != n) {
-                err(EXIT_FAILURE, "error writing to pipe\n");
+            if (dup2(pipe_fd[1], STDOUT_FILENO) == -1) {
+                fprintf(stderr, "Error en dup2 del hijo 1\n");
+                exit(1);
             }
-        }
 
-        if (n < 0) {
-            err(EXIT_FAILURE, "error reading input file");
-        }
+            close(pipe_fd[1]);
 
-        close(gzfile);
-        close(fd[1]); 
-
-        if (wait(&status) == -1) {
-            err(EXIT_FAILURE, "wait failed");
-        }
-
-        if (WIFEXITED(status) != 0) {
-
-                fprintf(stderr, "child exited succesfully\n");
-
-        } else {
-
-            fprintf(stderr, "child terminated wrongly\n");
-    
-        }
-
-        exit(EXIT_SUCCESS);
+            execl("/usr/bin/gunzip", "gunzip", "-c", NULL);
+            fprintf(stderr, "Error al ejecutar gunzip\n");
+            exit(1);
     }
-}
 
+    pid2 = fork();
+    switch (pid2) {
+        case -1:
+            fprintf(stderr, "Error en fork 2\n");
+            exit(1);
+        case 0:
+            close(pipe_fd[1]);
+
+            fd = open(nombre_fichero, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+            if (fd == -1) {
+                fprintf(stderr, "Error al abrir el archivo de salida\n");
+                close(pipe_fd[0]);
+                exit(1);
+            }
+
+            while ((n = read(pipe_fd[0], buffer, BUFFER_SIZE)) > 0) {
+                if (write(STDOUT_FILENO, buffer, n) != n) {
+                    fprintf(stderr, "Error al escribir en stdout\n");
+                    close(fd);
+                    close(pipe_fd[0]);
+                    exit(1);
+                }
+
+                if (write(fd, buffer, n) != n) {
+                    fprintf(stderr, "Error al escribir en el archivo\n");
+                    close(fd);
+                    close(pipe_fd[0]);
+                    exit(1);
+                }
+
+            }
+
+            if (n < 0) {
+                fprintf(stderr, "Error al leer del pipe\n");
+                close(fd);
+                close(pipe_fd[0]);
+                exit(1);
+            }
+
+            close(fd);
+            close(pipe_fd[0]);
+            exit(0);
+    }
+
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
+
+    for (i = 0; i < 2; i++) {
+        if (wait(&sts) == -1) {
+            fprintf(stderr, "Error al esperar a un hijo\n");
+            exit(1);
+        }
+        if (!WIFEXITED(sts) || WEXITSTATUS(sts) != 0) {
+            fprintf(stderr, "Un hijo terminó con error\n");
+            exit(1);
+        }
+    }
+
+    return 0;
+}
