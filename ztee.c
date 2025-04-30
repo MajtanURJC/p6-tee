@@ -23,7 +23,7 @@ int main(int argc, char *argv[]) {
     int i;
 
     if (argc != 1) {
-        fprintf(stderr, "Uso: %s <archivo_salida>\n", argv[0]);
+        fprintf(stderr, "Numero de argumentos incorrecto");
         exit(1);
     }
 
